@@ -1,0 +1,6 @@
+pyinstaller==4.7
+tqdm
+requests
+pandas
+argparse
+
