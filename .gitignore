@@ -165,3 +165,5 @@ demo/*
 build/*
 *.DS_Store
 archive/*
+*.tsv
+dist/
