@@ -1,5 +1,7 @@
-// Folk https://github.com/duckty/MetamonPlayer
+// Fork https://github.com/duckty/MetamonPlayer
 
+Download https://github.com/phongthanfz/MetamonPlayer/archive/refs/heads/master.zip && unzip
 ```
-make build_full
+cd [project]
+make
 ```
