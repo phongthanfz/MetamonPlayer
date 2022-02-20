@@ -3,7 +3,9 @@ from tqdm import trange
 import requests
 import os
 import sys
+import csv
 import pandas as pd
+from time import sleep
 from datetime import datetime
 
 
@@ -17,6 +19,7 @@ LIST_BATTLER_URL = f"{BASE_URL}/getBattelObjects"
 WALLET_PROPERTY_LIST = f"{BASE_URL}/getWalletPropertyList"
 LVL_UP_URL = f"{BASE_URL}/updateMonster"
 MINT_EGG_URL = f"{BASE_URL}/composeMonsterEgg"
+CHECK_BAG_URL = f"{BASE_URL}/checkBag"
 
 
 def datetime_now():
@@ -29,12 +32,19 @@ def post_formdata(payload, url="", headers=None):
     if headers is None:
         headers = {}
 
-    response = requests.request("POST",
-                                url,
-                                headers=headers,
-                                data=payload,
-                                files=files)
-    return response.json()
+    for _ in range(5):
+        try:
+            # Add delay to avoid error from too many requests per second
+            sleep(1)
+            response = requests.request("POST",
+                                        url,
+                                        headers=headers,
+                                        data=payload,
+                                        files=files)
+            return response.json()
+        except:
+            continue
+    return {}
 
 
 def get_battler_score(monster):
@@ -90,8 +100,11 @@ class MetamonPlayer:
 
     def init_token(self):
         """Obtain token for game session to perform battles and other actions"""
-        payload = {"address": self.address, "sign": self.sign, "msg": self.msg}
+        payload = {"address": self.address, "sign": self.sign, "msg": self.msg, "network": "1"}
         response = post_formdata(payload, TOKEN_URL)
+        if response.get("code") != "SUCCESS":
+            sys.stderr.write("Login failed, token is not initialized. Terminating\n")
+            sys.exit(-1)
         self.token = response.get("data")
 
     def change_fighter(self, monster_id):
@@ -125,6 +138,7 @@ class MetamonPlayer:
         total_bp_fragment_num = 0
         mtm_stats = []
         my_monster_id = my_monster.get("id")
+        my_monster_token_id = my_monster.get("tokenId")
         my_level = my_monster.get("level")
         my_power = my_monster.get("sca")
         battle_level = pick_battle_level(my_level)
@@ -172,7 +186,7 @@ class MetamonPlayer:
                 self.total_fail += 1
 
         mtm_stats.append({
-            "My metamon id": my_monster_id,
+            "My metamon id": my_monster_token_id,
             "League lvl": battle_level,
             "Total battles": loop_count,
             "My metamon power": my_power,
@@ -189,13 +203,14 @@ class MetamonPlayer:
 
     def get_wallet_properties(self):
         """ Obtain list of metamons on the wallet"""
-        payload = {"address": self.address, "page": 1, "pageSize": 60}
+
+        payload = {"address": self.address}
         headers = {
             "accessToken": self.token,
         }
         response = post_formdata(payload, WALLET_PROPERTY_LIST, headers)
-        data = response.get("data", {}).get("metamonList", [])
-        return data
+        mtms = response.get("data", {}).get("metamonList", [])
+        return mtms
 
     def list_monsters(self):
         """ Obtain list of metamons on the wallet (deprecated)"""
@@ -214,9 +229,8 @@ class MetamonPlayer:
         mtm_stats_file_name = f"{w_name}_stats.tsv"
         self.init_token()
 
-        self.get_wallet_properties()
-        monsters = self.list_monsters()
         wallet_monsters = self.get_wallet_properties()
+        print(f"Monsters total: {len(wallet_monsters)}")
 
         available_monsters = [
             monster for monster in wallet_monsters if monster.get("tear") > 0
@@ -288,15 +302,30 @@ class MetamonPlayer:
         }
         payload = {"address": self.address}
 
-        minted_eggs = 0
+        # Check current egg fragments
+        check_bag_res = post_formdata(payload, CHECK_BAG_URL, headers)
+        items = check_bag_res.get("data", {}).get("item")
+        total_egg_fragments = 0
 
-        while True:
-            res = post_formdata(payload, MINT_EGG_URL, headers)
-            code = res.get("code")
-            if code != "SUCCESS":
+        for item in items:
+            if item.get("bpType") == 1:
+                total_egg_fragments = item.get("bpNum")
                 break
-            minted_eggs += 1
-        print(f"Minted Eggs Total: {minted_eggs}")
+
+        total_egg = int(int(total_egg_fragments) / 1000)
+
+        if total_egg < 1:
+            print("You don't have enough egg fragments to mint")
+            return
+
+        # Mint egg
+        res = post_formdata(payload, MINT_EGG_URL, headers)
+        code = res.get("code")
+        if code != "SUCCESS":
+            print("Mint eggs failed!")
+            return
+
+        print(f"Minted Eggs Total: {total_egg}")
 
 
 if __name__ == "__main__":
@@ -326,7 +355,12 @@ if __name__ == "__main__":
         print(f"Input file {args.input_tsv} does not exist")
         sys.exit(-1)
 
-    wallets = pd.read_csv(args.input_tsv, sep="\t")
+    # determine delimiter char from given input file
+    with open(args.input_tsv) as csvfile:
+        dialect = csv.Sniffer().sniff(csvfile.readline(), "\t ;,")
+        delim = dialect.delimiter
+
+    wallets = pd.read_csv(args.input_tsv, sep=delim)
 
     auto_lvlup = not args.no_lvlup
     for i, r in wallets.iterrows():
